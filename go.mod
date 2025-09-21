@@ -1,6 +1,6 @@
 module github.com/KEINOS/go-which-pgp
 
-go 1.25.1
+go 1.24.0
 
 require (
 	github.com/pkg/errors v0.9.1
