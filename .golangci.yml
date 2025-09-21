@@ -1,0 +1,17 @@
+version: "2"
+run:
+  build-tags:
+    - golangci
+  tests: true
+  allow-parallel-runners: true
+linters:
+  default: all
+  disable:
+    # Disable due to the new major version. Replaced by wsl_v5.
+    - wsl
+    # Disable due to the external dependency
+    - depguard
+  exclusions:
+    generated: lax
+    paths:
+      - .github
