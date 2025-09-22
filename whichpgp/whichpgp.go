@@ -493,6 +493,11 @@ func newFmtCaseShort(data []byte, index int, tag int, lenFirst byte) (int, int, 
 	}
 
 	if tag == tagPublicKey || tag == tagPublicSubkey {
+		// Ensure there is at least 1 byte to read the version.
+		if bodyLen < 1 {
+			return 0, 0, false, errors.New("public key packet body too short for version (new fmt)")
+		}
+
 		return 0, int(data[index+hdrLen]), true, nil
 	}
 
@@ -514,6 +519,10 @@ func newFmtCaseTwoOctet(data []byte, index int, tag int, lenFirst byte) (int, in
 	}
 
 	if tag == tagPublicKey || tag == tagPublicSubkey {
+		if bodyLen < 1 {
+			return 0, 0, false, errors.New("public key packet body too short for version (new fmt)")
+		}
+
 		return 0, int(data[index+hdrLen]), true, nil
 	}
 
@@ -539,6 +548,10 @@ func newFmtCaseFiveOctet(data []byte, index int, tag int) (int, int, bool, error
 	}
 
 	if tag == tagPublicKey || tag == tagPublicSubkey {
+		if bodyLen < 1 {
+			return 0, 0, false, errors.New("public key packet body too short for version (new fmt)")
+		}
+
 		return 0, int(data[index+hdrLen]), true, nil
 	}
 
@@ -568,6 +581,10 @@ func oldFmtCase1Octet(data []byte, index int, tag int) (int, int, bool, error) {
 	}
 
 	if tag == tagPublicKey || tag == tagPublicSubkey {
+		if bodyLen < 1 {
+			return 0, 0, false, errors.New("public key packet body too short for version (old fmt)")
+		}
+
 		return 0, int(data[index+hdrLen]), true, nil
 	}
 
@@ -588,6 +605,10 @@ func oldFmtCase2Octet(data []byte, index int, tag int) (int, int, bool, error) {
 	}
 
 	if tag == tagPublicKey || tag == tagPublicSubkey {
+		if bodyLen < 1 {
+			return 0, 0, false, errors.New("public key packet body too short for version (old fmt)")
+		}
+
 		return 0, int(data[index+hdrLen]), true, nil
 	}
 
@@ -612,6 +633,10 @@ func oldFmtCase4Octet(data []byte, index int, tag int) (int, int, bool, error) {
 	}
 
 	if tag == tagPublicKey || tag == tagPublicSubkey {
+		if bodyLen < 1 {
+			return 0, 0, false, errors.New("public key packet body too short for version (old fmt)")
+		}
+
 		return 0, int(data[index+hdrLen]), true, nil
 	}
 
