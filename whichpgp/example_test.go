@@ -41,6 +41,9 @@ func Example() {
 	// Flavor: OpenPGP (v6 / RFC 9580), Version: 6
 }
 
+// Minimal synthetic keys for testing.
+// Note that they are not intended for real-world use; they exist solely to
+// exercise parsing and version detection paths.
 func Example_minimal_synthetic_keys() {
 	data := []string{
 		`-----BEGIN PGP PUBLIC KEY BLOCK-----
