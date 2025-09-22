@@ -530,6 +530,8 @@ func newFmtCaseTwoOctet(data []byte, index int, tag int, lenFirst byte) (int, in
 }
 
 // newFmtCaseFiveOctet handles l0 == 255 (five-octet body length encoding).
+//
+//nolint:dupl // The structure mirrors oldFmtCase4Octet; duplication is intentional for clarity across formats.
 func newFmtCaseFiveOctet(data []byte, index int, tag int) (int, int, bool, error) {
 	if index+5 >= len(data) {
 		return 0, 0, false, errors.New("need 5-octet length (new fmt)")
@@ -615,6 +617,7 @@ func oldFmtCase2Octet(data []byte, index int, tag int) (int, int, bool, error) {
 	return hdrLen + bodyLen, 0, false, nil
 }
 
+//nolint:dupl // The structure mirrors newFmtCaseFiveOctet; keeping parallel logic improves readability.
 func oldFmtCase4Octet(data []byte, index int, tag int) (int, int, bool, error) {
 	if index+4 >= len(data) {
 		return 0, 0, false, errors.New("need 4-octet length (old fmt)")

@@ -322,9 +322,10 @@ func TestDetectFlavorFromArmor_NewFormat_ZeroLengthBody_ShouldError(t *testing.T
 func TestDetectFlavorFromArmor_OldFormat_ZeroLengthBody_ShouldError(t *testing.T) {
 	t.Parallel()
 
-	mk := func(ltype int) []byte {
+	buildZeroLenOldFmt := func(ltype int) []byte {
 		// Old-format header: 0x80 | (tag<<2) | ltype
 		const tag = 6
+
 		header := byte(0x80 | (tag << 2) | (ltype & 0x03))
 		switch ltype {
 		case 0: // 1-octet length = 0
@@ -348,11 +349,10 @@ func TestDetectFlavorFromArmor_OldFormat_ZeroLengthBody_ShouldError(t *testing.T
 	}
 
 	for _, tc := range cases {
-		tc := tc
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
 
-			payload := mk(tc.ltype)
+			payload := buildZeroLenOldFmt(tc.ltype)
 			armorText := armor(payload)
 
 			_, _, err := whichpgp.DetectFlavorFromArmor(armorText)
