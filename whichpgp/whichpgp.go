@@ -6,12 +6,17 @@ import (
 	"bufio"
 	"bytes"
 	"encoding/base64"
+	"fmt"
 	"io"
 	"math"
 	"strings"
 
 	"github.com/pkg/errors"
 )
+
+// ============================================================================
+//  Constants
+// ============================================================================
 
 // Constants for magic numbers and limits.
 const (
@@ -69,10 +74,237 @@ const (
 )
 
 // ============================================================================
+//  Types
+// ============================================================================
+
+// Flavor represents the PGP implementation family.
+type Flavor uint8
+
+const (
+	// FlavorUnknown indicates an unrecognized or unsupported PGP flavor.
+	FlavorUnknown Flavor = iota
+	// FlavorLibrePGP represents LibrePGP (packet versions 4 and 5).
+	FlavorLibrePGP
+	// FlavorOpenPGP represents OpenPGP v6 (RFC 9580).
+	FlavorOpenPGP
+)
+
+// String returns the human-readable name of the PGP flavor.
+func (f Flavor) String() string {
+	switch f {
+	case FlavorLibrePGP:
+		return "LibrePGP"
+	case FlavorOpenPGP:
+		return "OpenPGP"
+	case FlavorUnknown:
+		return "Unknown"
+	default:
+		return "Unknown"
+	}
+}
+
+// Result contains the detection results from PGP armor analysis.
+type Result struct {
+	// Flavor indicates the PGP implementation family.
+	Flavor Flavor
+	// PacketVersion is the public-key packet version (4, 5, or 6).
+	PacketVersion uint8
+}
+
+// String returns a human-readable description of the detection result.
+func (r Result) String() string {
+	switch r.Flavor {
+	case FlavorLibrePGP:
+		return fmt.Sprintf("LibrePGP (v%d)", r.PacketVersion)
+	case FlavorOpenPGP:
+		return fmt.Sprintf("OpenPGP (v%d / RFC 9580)", r.PacketVersion)
+	case FlavorUnknown:
+		return fmt.Sprintf("Unknown (v%d)", r.PacketVersion)
+	default:
+		return fmt.Sprintf("Unknown (v%d)", r.PacketVersion)
+	}
+}
+
+// ============================================================================
+//  Options
+// ============================================================================
+
+// Option configures PGP detection behavior.
+type Option func(*config)
+
+// config holds internal configuration for detection functions.
+type config struct {
+	maxBytes   int
+	strictCRC  bool
+	scanCap    int
+	bufferSize int
+}
+
+// defaultConfig returns the default configuration.
+func defaultConfig() *config {
+	const (
+		defaultSizeMultiplier = 2
+		defaultBufferSizeKB   = 64
+		kibibyte              = 1024
+	)
+
+	return &config{
+		maxBytes:   maxPacketScanBytes * defaultSizeMultiplier, // 8 MiB default
+		strictCRC:  false,
+		scanCap:    maxPacketScanBytes,             // 4 MiB default
+		bufferSize: defaultBufferSizeKB * kibibyte, // 64 KiB buffer for streaming
+	}
+}
+
+// WithMaxBytes sets the maximum size limit for processing data.
+// This prevents DoS attacks from extremely large inputs.
+func WithMaxBytes(n int) Option {
+	return func(c *config) {
+		if n > 0 {
+			c.maxBytes = n
+		}
+	}
+}
+
+// WithStrictCRC enables strict CRC-24 validation.
+// When enabled, missing CRC lines will cause errors.
+func WithStrictCRC(strict bool) Option {
+	return func(c *config) {
+		c.strictCRC = strict
+	}
+}
+
+// WithScanCap sets the packet scanning limit.
+// This controls how much data is scanned when looking for public key packets.
+func WithScanCap(n int) Option {
+	return func(c *config) {
+		if n > 0 {
+			c.scanCap = n
+		}
+	}
+}
+
+// WithBufferSize sets the buffer size for streaming operations.
+func WithBufferSize(n int) Option {
+	return func(c *config) {
+		if n > 0 {
+			c.bufferSize = n
+		}
+	}
+}
+
+// ============================================================================
 //  API/Public Functions
 // ============================================================================
 
+// DetectFlavorFromBytes detects the PGP flavor from byte data.
+// This is the primary API that supports configuration options.
+//
+// The function analyzes ASCII-armored public key blocks and returns structured
+// results with type-safe flavor identification and packet version information.
+//
+// Options can be used to customize behavior:
+//   - WithMaxBytes(n): Set maximum processing size limit
+//   - WithStrictCRC(true): Require CRC-24 validation
+//   - WithScanCap(n): Set packet scanning limit
+//
+// Example:
+//
+//	result, err := whichpgp.DetectFlavorFromBytes(data, WithStrictCRC(true))
+//	if err != nil {
+//	    return err
+//	}
+//	fmt.Printf("Detected: %s\n", result.String())
+func DetectFlavorFromBytes(data []byte, opts ...Option) (Result, error) {
+	cfg := defaultConfig()
+	for _, opt := range opts {
+		opt(cfg)
+	}
+
+	if len(data) > cfg.maxBytes {
+		return Result{}, errors.Errorf("input too large (%d bytes, limit %d)", len(data), cfg.maxBytes)
+	}
+
+	// Use the existing decode logic with configuration
+	raw, err := decodeArmoredWithConfig(string(data), cfg)
+	if err != nil {
+		return Result{}, err
+	}
+
+	ver, err := firstPubkeyVersionWithConfig(raw, cfg)
+	if err != nil {
+		return Result{}, err
+	}
+
+	return makeResult(ver), nil
+}
+
+// DetectFlavorFromReader detects the PGP flavor from an io.Reader stream.
+// This function supports processing large inputs without loading everything into memory.
+//
+// The reader is consumed until EOF or the maximum configured size is reached.
+// A buffer is used internally for efficient streaming operations.
+//
+// Example:
+//
+//	file, err := os.Open("pubkey.asc")
+//	if err != nil {
+//	    return err
+//	}
+//	defer file.Close()
+//
+//	result, err := whichpgp.DetectFlavorFromReader(file, WithMaxBytes(1024*1024))
+//	if err != nil {
+//	    return err
+//	}
+//	fmt.Printf("Detected: %s\n", result.String())
+func DetectFlavorFromReader(reader io.Reader, opts ...Option) (Result, error) {
+	cfg := defaultConfig()
+	for _, opt := range opts {
+		opt(cfg)
+	}
+
+	// Read from the stream with size limit
+	data := make([]byte, 0, cfg.bufferSize)
+	buf := make([]byte, cfg.bufferSize)
+
+	for {
+		bytesRead, err := reader.Read(buf)
+		if bytesRead > 0 {
+			if len(data)+bytesRead > cfg.maxBytes {
+				return Result{}, errors.Errorf("stream too large (limit %d bytes)", cfg.maxBytes)
+			}
+
+			data = append(data, buf[:bytesRead]...)
+		}
+
+		if err != nil {
+			if errors.Is(err, io.EOF) {
+				break
+			}
+
+			return Result{}, errors.Wrap(err, "read stream")
+		}
+	}
+
+	return DetectFlavorFromBytes(data, opts...)
+}
+
+// DetectFlavorFromString is a convenience function for string inputs.
+// This provides a consistent interface for string-based detection.
+func DetectFlavorFromString(data string, opts ...Option) (Result, error) {
+	return DetectFlavorFromBytes([]byte(data), opts...)
+}
+
+// ============================================================================
+//  Compatibility Aliases
+// ============================================================================
+
 // DetectFlavorFromArmor detects the PGP flavor from ASCII-armored public key text.
+// This function is maintained for backward compatibility.
+//
+// For new code, prefer DetectFlavorFromBytes() which provides structured results and
+// configuration options.
 //
 // Armor handling:
 //   - Armor headers are ignored until a blank/whitespace-only separator line.
@@ -83,26 +315,12 @@ const (
 // References: RFC 4880 (ASCII Armor and Armor Checksum, e.g., Section 6.3) and
 // RFC 9580.
 func DetectFlavorFromArmor(armored string) (string, int, error) {
-	raw, err := decodeArmored(armored)
+	result, err := DetectFlavorFromBytes([]byte(armored))
 	if err != nil {
 		return "", 0, err
 	}
 
-	ver, err := firstPubkeyVersion(raw)
-	if err != nil {
-		return "", 0, err
-	}
-
-	switch ver {
-	case versionV6:
-		return "OpenPGP (v6 / RFC 9580)", versionV6, nil
-	case versionV5:
-		return "LibrePGP (v5)", versionV5, nil
-	case versionV4:
-		return "LibrePGP (v4)", versionV4, nil
-	default:
-		return "Unknown", ver, nil
-	}
+	return result.String(), int(result.PacketVersion), nil
 }
 
 // ============================================================================
@@ -130,6 +348,179 @@ func checkCRC(payload []byte, crcLine string) error {
 	}
 
 	return nil
+}
+
+// checkCRCWithConfig validates CRC with configuration options.
+func checkCRCWithConfig(payload []byte, crcLine string, cfg *config) error {
+	if cfg.strictCRC && (crcLine == "" || !strings.HasPrefix(crcLine, "=")) {
+		return errors.New("CRC-24 line required but missing")
+	}
+
+	return checkCRC(payload, crcLine)
+}
+
+// decodeArmoredWithConfig parses ASCII-armored block with configuration.
+func decodeArmoredWithConfig(armored string, cfg *config) ([]byte, error) {
+	block, err := findArmorBlock(armored)
+	if err != nil {
+		return nil, err
+	}
+
+	reader := bufio.NewReader(strings.NewReader(block))
+
+	err = readArmorHeaders(reader)
+	if err != nil {
+		return nil, err
+	}
+
+	b64, crcLine, err := readB64AndCRC(reader)
+	if err != nil {
+		return nil, err
+	}
+
+	payload, err := decodeBase64PayloadWithConfig(b64, cfg)
+	if err != nil {
+		return nil, err
+	}
+
+	err = checkCRCWithConfig(payload, crcLine, cfg)
+	if err != nil {
+		return nil, err
+	}
+
+	return payload, nil
+}
+
+// decodeBase64PayloadWithConfig decodes base64 payload with size limits.
+func decodeBase64PayloadWithConfig(b64 string, cfg *config) ([]byte, error) {
+	// Strip ASCII whitespace that may legally appear inside base64 bodies.
+	b64 = compactB64(b64)
+
+	// Pre-decode size guard to avoid large allocations/DoS.
+	// Roughly, decoded size <= len(b64) * 3 / 4.
+	const (
+		b64DecodeNumerator   = 3
+		b64DecodeDenominator = 4
+	)
+
+	if est := (len(b64) * b64DecodeNumerator) / b64DecodeDenominator; est > cfg.maxBytes {
+		return nil, errors.Errorf("armored payload too large (>~%d bytes)", cfg.maxBytes)
+	}
+
+	payload, err := base64.StdEncoding.DecodeString(b64)
+	if err != nil {
+		return nil, errors.Wrap(err, "base64 decode")
+	}
+
+	return payload, nil
+}
+
+// firstPubkeyVersionWithConfig scans for first public key with configuration.
+func firstPubkeyVersionWithConfig(data []byte, cfg *config) (int, error) {
+	if len(data) == 0 {
+		return 0, errors.New("empty data")
+	}
+
+	limit := minInt(len(data), cfg.scanCap)
+
+	for idx := 0; idx < limit; {
+		ver, advance, err := processPacketAt(data, idx, 0, 0)
+		if err != nil {
+			return 0, err
+		}
+
+		if ver != 0 {
+			return ver, nil
+		}
+
+		if advance <= 0 {
+			return 0, errors.Errorf("packet parsing made no progress at index %d", idx)
+		}
+
+		idx += advance
+	}
+
+	// If we stopped because of the scan cap and the input is larger than the cap,
+	// surface a dedicated hint so callers know how to react.
+	if len(data) > cfg.scanCap && limit == cfg.scanCap {
+		return 0, errors.Errorf(
+			"scan cap reached (%d bytes) before finding tag 6/14; "+
+				"if input is valid, consider increasing scan cap",
+			cfg.scanCap,
+		)
+	}
+
+	return 0, errors.New("no tag 6/14 packet found")
+}
+
+// processPacketAt processes a single packet at the given index and returns version, advance, error.
+// Returns version=0 if not a target packet, advance>0 to skip to next packet.
+func processPacketAt(data []byte, idx int, _ int, _ int) (int, int, error) {
+	// Ensure we do not read beyond the slice when accessing data[idx].
+	if idx >= len(data) {
+		return 0, 0, errors.New("truncated before header")
+	}
+
+	oct := data[idx]
+
+	// Bit 7 must be set for packet headers per spec; otherwise bail out.
+	if oct&0x80 == 0 {
+		return 0, 0, errors.Wrapf(errors.New("not a packet header"), "at %d", idx)
+	}
+
+	// New-format vs old-format is indicated by 0x40.
+	if (oct & headerNewFormatMask) != 0 { // new-format
+		adv, ver, found, parseErr := parseNewFormatPacket(data, idx, int(oct&newFormatTagMask))
+		if parseErr != nil {
+			return 0, 0, parseErr
+		}
+
+		if found {
+			return ver, 0, nil
+		}
+
+		return 0, adv, nil
+	}
+
+	// Old-format header path
+	adv, ver, found, parseErr := parseOldFormatPacket(
+		data,
+		idx,
+		int((oct>>shift2)&oldFormatTagMask),
+		int(oct&oldFormatLenTypeMask),
+	)
+	if parseErr != nil {
+		return 0, 0, errors.Wrap(parseErr, "failed to parse old-format packet")
+	}
+
+	if found {
+		return ver, 0, nil
+	}
+
+	return 0, adv, nil
+}
+
+// makeResult creates a Result from a packet version.
+func makeResult(ver int) Result {
+	const maxUint8 = 255
+
+	switch ver {
+	case versionV6:
+		return Result{Flavor: FlavorOpenPGP, PacketVersion: uint8(ver)}
+	case versionV5, versionV4:
+		return Result{Flavor: FlavorLibrePGP, PacketVersion: uint8(ver)}
+	default:
+		// Handle potential overflow by capping at max uint8
+		packetVer := ver
+		if ver > maxUint8 {
+			packetVer = maxUint8
+		} else if ver < 0 {
+			packetVer = 0
+		}
+
+		// #nosec G115 -- packetVer is already validated to be within uint8 range
+		return Result{Flavor: FlavorUnknown, PacketVersion: uint8(packetVer)}
+	}
 }
 
 // compactB64 removes ASCII whitespace characters from a base64 string.
@@ -170,7 +561,12 @@ func consumePartialBody(data []byte, startIndex int, hdrLen int, tag int, lenFir
 	}
 
 	if tag == tagPublicKey || tag == tagPublicSubkey {
-		return 0, int(data[bodyStart]), true, nil
+		version := int(data[bodyStart])
+		if version == 0 {
+			return 0, 0, false, errors.New("invalid packet version 0 (new fmt, partial)")
+		}
+
+		return 0, version, true, nil
 	}
 
 	pos := bodyStart + chunkLen
@@ -217,63 +613,6 @@ func crc24(data []byte) []byte {
 	}
 
 	return []byte{byte(crc >> shift16), byte(crc >> shift8), byte(crc)}
-}
-
-// decodeArmored parses the ASCII-armored block and returns the raw payload.
-func decodeArmored(armored string) ([]byte, error) {
-	block, err := findArmorBlock(armored)
-	if err != nil {
-		return nil, err
-	}
-
-	reader := bufio.NewReader(strings.NewReader(block))
-
-	err = readArmorHeaders(reader)
-	if err != nil {
-		return nil, err
-	}
-
-	b64, crcLine, err := readB64AndCRC(reader)
-	if err != nil {
-		return nil, err
-	}
-
-	payload, err := decodeBase64Payload(b64)
-	if err != nil {
-		return nil, err
-	}
-
-	err = checkCRC(payload, crcLine)
-	if err != nil {
-		return nil, err
-	}
-
-	return payload, nil
-}
-
-// decodeBase64Payload decodes a concatenated base64 payload string.
-func decodeBase64Payload(b64 string) ([]byte, error) {
-	// Strip ASCII whitespace that may legally appear inside base64 bodies.
-	b64 = compactB64(b64)
-
-	// Pre-decode size guard to avoid large allocations/DoS.
-	// Roughly, decoded size <= len(b64) * 3 / 4.
-	const (
-		b64DecodeNumerator   = 3
-		b64DecodeDenominator = 4
-		sizeGuardMultiplier  = 2
-	)
-
-	if est := (len(b64) * b64DecodeNumerator) / b64DecodeDenominator; est > maxPacketScanBytes*sizeGuardMultiplier {
-		return nil, errors.Errorf("armored payload too large (>~%d bytes)", maxPacketScanBytes*sizeGuardMultiplier)
-	}
-
-	payload, err := base64.StdEncoding.DecodeString(b64)
-	if err != nil {
-		return nil, errors.Wrap(err, "base64 decode")
-	}
-
-	return payload, nil
 }
 
 // ensureRange verifies [start, start+need) fits within data and caps large requests.
@@ -325,79 +664,6 @@ func findArmorBlock(src string) (string, error) {
 	return after[:endIdx], nil
 }
 
-// firstPubkeyVersion scans the raw packet data for the first public key or subkey
-// packet (tag 6 or 14) and returns its version byte.
-//
-//nolint:cyclop // The packet scanning loop needs several branch cases (new/old format, partial/finite lengths).
-func firstPubkeyVersion(data []byte) (int, error) {
-	if len(data) == 0 {
-		return 0, errors.New("empty data")
-	}
-
-	var idx int
-
-	limit := minInt(len(data), maxPacketScanBytes)
-
-	for idx < limit {
-		// Ensure we do not read beyond the slice when accessing data[idx].
-		if idx >= len(data) {
-			return 0, errors.New("truncated before header")
-		}
-
-		oct := data[idx]
-
-		// Bit 7 must be set for packet headers per spec; otherwise bail out.
-		if oct&0x80 == 0 {
-			return 0, errors.Wrapf(errors.New("not a packet header"), "at %d", idx)
-		}
-
-		// New-format vs old-format is indicated by 0x40.
-		if (oct & headerNewFormatMask) != 0 { // new-format
-			adv, ver, found, err := parseNewFormatPacket(data, idx, int(oct&newFormatTagMask))
-			if err != nil {
-				return 0, err
-			}
-
-			if found {
-				return ver, nil
-			}
-
-			idx += adv
-
-			continue
-		}
-
-		// Old-format header path
-		adv, ver, found, err := parseOldFormatPacket(
-			data,
-			idx,
-			int((oct>>shift2)&oldFormatTagMask),
-			int(oct&oldFormatLenTypeMask),
-		)
-		if err != nil {
-			return 0, errors.Wrap(err, "failed to parse old-format packet")
-		}
-
-		if found {
-			return ver, nil
-		}
-
-		idx += adv
-	}
-
-	// If we stopped because of the scan cap and the input is larger than the cap,
-	// surface a dedicated hint so callers know how to react.
-	if len(data) > maxPacketScanBytes && limit == maxPacketScanBytes {
-		return 0, errors.Errorf(
-			"scan cap reached (%d bytes) before finding tag 6/14; "+
-				"if input is valid, consider increasing scan cap",
-			maxPacketScanBytes,
-		)
-	}
-
-	return 0, errors.New("no tag 6/14 packet found")
-}
-
 // minInt returns the smaller of two ints.
 func minInt(a, b int) int {
 	if a < b {
@@ -423,7 +689,12 @@ func newFmtCaseShort(data []byte, index int, tag int, lenFirst byte) (int, int, 
 			return 0, 0, false, errors.New("public key packet body too short for version (new fmt)")
 		}
 
-		return 0, int(data[index+hdrLen]), true, nil
+		version := int(data[index+hdrLen])
+		if version == 0 {
+			return 0, 0, false, errors.New("invalid packet version 0 (new fmt)")
+		}
+
+		return 0, version, true, nil
 	}
 
 	return hdrLen + bodyLen, 0, false, nil
@@ -448,7 +719,12 @@ func newFmtCaseTwoOctet(data []byte, index int, tag int, lenFirst byte) (int, in
 			return 0, 0, false, errors.New("public key packet body too short for version (new fmt)")
 		}
 
-		return 0, int(data[index+hdrLen]), true, nil
+		version := int(data[index+hdrLen])
+		if version == 0 {
+			return 0, 0, false, errors.New("invalid packet version 0 (new fmt)")
+		}
+
+		return 0, version, true, nil
 	}
 
 	return hdrLen + bodyLen, 0, false, nil
@@ -479,7 +755,12 @@ func newFmtCaseFiveOctet(data []byte, index int, tag int) (int, int, bool, error
 			return 0, 0, false, errors.New("public key packet body too short for version (new fmt)")
 		}
 
-		return 0, int(data[index+hdrLen]), true, nil
+		version := int(data[index+hdrLen])
+		if version == 0 {
+			return 0, 0, false, errors.New("invalid packet version 0 (new fmt)")
+		}
+
+		return 0, version, true, nil
 	}
 
 	return hdrLen + bodyLen, 0, false, nil
@@ -511,7 +792,12 @@ func oldFmtCase1Octet(data []byte, index int, tag int) (int, int, bool, error) {
 			return 0, 0, false, errors.New("public key packet body too short for version (old fmt)")
 		}
 
-		return 0, int(data[index+hdrLen]), true, nil
+		version := int(data[index+hdrLen])
+		if version == 0 {
+			return 0, 0, false, errors.New("invalid packet version 0 (old fmt)")
+		}
+
+		return 0, version, true, nil
 	}
 
 	return hdrLen + bodyLen, 0, false, nil
@@ -535,7 +821,12 @@ func oldFmtCase2Octet(data []byte, index int, tag int) (int, int, bool, error) {
 			return 0, 0, false, errors.New("public key packet body too short for version (old fmt)")
 		}
 
-		return 0, int(data[index+hdrLen]), true, nil
+		version := int(data[index+hdrLen])
+		if version == 0 {
+			return 0, 0, false, errors.New("invalid packet version 0 (old fmt)")
+		}
+
+		return 0, version, true, nil
 	}
 
 	return hdrLen + bodyLen, 0, false, nil
@@ -564,7 +855,12 @@ func oldFmtCase4Octet(data []byte, index int, tag int) (int, int, bool, error) {
 			return 0, 0, false, errors.New("public key packet body too short for version (old fmt)")
 		}
 
-		return 0, int(data[index+hdrLen]), true, nil
+		version := int(data[index+hdrLen])
+		if version == 0 {
+			return 0, 0, false, errors.New("invalid packet version 0 (old fmt)")
+		}
+
+		return 0, version, true, nil
 	}
 
 	return hdrLen + bodyLen, 0, false, nil
