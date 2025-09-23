@@ -148,9 +148,10 @@ result.Flavor.String() // Flavor name: "LibrePGP"
 
 Customize behavior with functional options:
 
-- `WithStrictCRC(bool)` - Require valid CRC checksums (default: true)
-- `WithMaxBytes(int)` - Set maximum data size limit
-- `WithBufferSize(int)` - Set buffer size for reader operations
+- `WithStrictCRC(bool)` - Require valid CRC checksums (default: false)
+- `WithMaxBytes(int)` - Set maximum data size limit (default: 8 MiB)
+- `WithBufferSize(int)` - Set buffer size for reader operations (default: 64 KiB)
+- `WithScanCap(int)` - Set packet scanning limit for safety (default: 4 MiB)
 
 ### Supported PGP Flavors
 

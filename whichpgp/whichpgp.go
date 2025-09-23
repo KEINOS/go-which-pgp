@@ -424,7 +424,7 @@ func firstPubkeyVersionWithConfig(data []byte, cfg *config) (int, error) {
 	limit := minInt(len(data), cfg.scanCap)
 
 	for idx := 0; idx < limit; {
-		ver, advance, err := processPacketAt(data, idx, 0, 0)
+		ver, advance, err := processPacketAt(data, idx)
 		if err != nil {
 			return 0, err
 		}
@@ -455,7 +455,7 @@ func firstPubkeyVersionWithConfig(data []byte, cfg *config) (int, error) {
 
 // processPacketAt processes a single packet at the given index and returns version, advance, error.
 // Returns version=0 if not a target packet, advance>0 to skip to next packet.
-func processPacketAt(data []byte, idx int, _ int, _ int) (int, int, error) {
+func processPacketAt(data []byte, idx int) (int, int, error) {
 	// Ensure we do not read beyond the slice when accessing data[idx].
 	if idx >= len(data) {
 		return 0, 0, errors.New("truncated before header")
