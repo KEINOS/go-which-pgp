@@ -1,9 +1,9 @@
 # Go-Which-PGP
 
-Go library to detect the PGP flavor and the Public‑Key Packet version from an ASCII‑armored public key block.
+`whichpgp` is a Go library to detect the PGP flavor and the Public‑Key Packet version from an ASCII‑armored public key block.
 
-- OpenPGP (Packet v6; RFC 9580)
-- LibrePGP (Packet v4 / Packet v5; RFC 4880 / draft-ietf-openpgp-crypto-refresh)
+- OpenPGP (Packet v6; RFC-9580/crypto-refresh)
+- LibrePGP (Packet v4; RFC-4880, Packet v5; draft-koch-librepgp base)
 
 ## Install
 
