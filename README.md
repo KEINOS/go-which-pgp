@@ -35,7 +35,7 @@ func main() {
 -----END PGP PUBLIC KEY BLOCK-----`
 
     // Direct string input and output
-    flavor, version, err := whichpgp.DetectFlavorFromArmor(armor)
+    flavor, version, err := whichpgp.DetectFlavorFromArmor(pubKey)
     if err != nil {
         panic(err)
     }
@@ -96,11 +96,20 @@ result, err := whichpgp.DetectFlavorFromBytes([]byte(pubKey),
 ```
 
 ```go
+import (
+    "os"
+    "path/filepath"
+)
+
 filePath := filepath.Join("..", "testdata", "sample-v5-certificate-trans.asc")
-reader := io.Reader(filePath)
+file, err := os.Open(filePath)
+if err != nil {
+    panic(err)
+}
+defer file.Close()
 
 // From io.Reader for streaming
-result, err := whichpgp.DetectFlavorFromReader(reader,
+result, err := whichpgp.DetectFlavorFromReader(file,
     whichpgp.WithStrictCRC(false),    // Allow missing CRC
     whichpgp.WithMaxBytes(1024*1024), // Set size limit
     whichpgp.WithBufferSize(8192),    // Custom buffer size
@@ -115,8 +124,9 @@ The library provides three main functions for detecting PGP flavors:
 
 ### Available Functions
 
-- **`DetectFlavorFromBytes(data []byte, opts ...Option) (*Result, error)`** - Detects PGP flavor from byte data with optional configuration
-- **`DetectFlavorFromReader(r io.Reader, opts ...Option) (*Result, error)`** - Detects PGP flavor from any `io.Reader` source
+- **`DetectFlavorFromBytes(data []byte, opts ...Option) (Result, error)`** - Detects PGP flavor from byte data with optional configuration
+- **`DetectFlavorFromReader(r io.Reader, opts ...Option) (Result, error)`** - Detects PGP flavor from any `io.Reader` source
+- **`DetectFlavorFromString(data string, opts ...Option) (Result, error)`** - Convenience function for string inputs with options
 - **`DetectFlavorFromArmor(armor string) (string, int, error)`** - Simple string-based detection API
 
 ### Result Structure
@@ -166,7 +176,7 @@ Customize behavior with functional options:
 All detection functions follow these principles:
 
 - **Return values:**
-  - `DetectFlavorFromBytes` & `DetectFlavorFromReader`: `*Result` with `Flavor` enum and `PacketVersion` int
+  - `DetectFlavorFromBytes`, `DetectFlavorFromReader` & `DetectFlavorFromString`: `Result` with `Flavor` enum and `PacketVersion` int
   - `DetectFlavorFromArmor`: flavor string ("LibrePGP" or "OpenPGP") and version int (4, 5, or 6)
 
 ### Armor Processing
