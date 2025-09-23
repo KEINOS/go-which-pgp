@@ -176,8 +176,8 @@ Customize behavior with functional options:
 All detection functions follow these principles:
 
 - **Return values:**
-  - `DetectFlavorFromBytes`, `DetectFlavorFromReader` & `DetectFlavorFromString`: `Result` with `Flavor` enum and `PacketVersion` int
-  - `DetectFlavorFromArmor`: flavor string ("LibrePGP" or "OpenPGP") and version int (4, 5, or 6)
+  - `DetectFlavorFromBytes`, `DetectFlavorFromReader` & `DetectFlavorFromString`: `Result` with `Flavor` enum and `PacketVersion` uint8
+  - `DetectFlavorFromArmor`: human-readable description string (e.g., "LibrePGP (v4)", "OpenPGP (v6 / RFC 9580)") and version int (4, 5, or 6)
 
 ### Armor Processing
 
