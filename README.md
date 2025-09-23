@@ -136,7 +136,7 @@ The new APIs return a structured `Result` type:
 ```go
 type Result struct {
     Flavor        Flavor // Type-safe enum: FlavorUnknown, FlavorLibrePGP, FlavorOpenPGP
-    PacketVersion int    // PGP packet version (4, 5, 6)
+    PacketVersion uint8  // PGP packet version (4, 5, 6)
 }
 
 // Methods
