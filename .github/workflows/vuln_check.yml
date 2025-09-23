@@ -39,6 +39,7 @@ jobs:
           check-latest: true
 
       - name: Install dependencies
+        # We install the latest version due to the fail-fast policy
         run: |
           go install "golang.org/x/vuln/cmd/govulncheck@latest"
           curl -sSfL https://raw.githubusercontent.com/golangci/golangci-lint/master/install.sh | sh -s -- -b $(go env GOPATH)/bin
