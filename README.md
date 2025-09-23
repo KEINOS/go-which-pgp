@@ -1,3 +1,6 @@
+![GitHub go.mod Go version](https://img.shields.io/github/go-mod/go-version/KEINOS/go-which-pgp)
+[![Go Reference](https://pkg.go.dev/badge/github.com/KEINOS/go-which-pgp.svg)](https://pkg.go.dev/github.com/KEINOS/go-which-pgp/whichpgp)
+
 # Go-Which-PGP
 
 `whichpgp` is a Go library to detect the PGP flavor and the Public‑Key Packet version from an ASCII‑armored public key block.
@@ -39,17 +42,16 @@ func main() {
 
         fmt.Printf("Flavor: %s, Packet version: %d\n", flavor, ver)
     }
+    //
+    // Output:
+    // Flavor: LibrePGP (v4), Packet version: 4
+    // Flavor: LibrePGP (v4), Packet version: 4
+    // Flavor: LibrePGP (v5), Packet version: 5
+    // Flavor: OpenPGP (v6 / RFC 9580), Packet version: 6
 }
 ```
 
-Expected output (from examples):
-
-```text
-Flavor: LibrePGP (v4), Packet version: 4
-Flavor: LibrePGP (v4), Packet version: 4
-Flavor: LibrePGP (v5), Packet version: 5
-Flavor: OpenPGP (v6 / RFC 9580), Packet version: 6
-```
+- View more examples: [whichpgp/example_test.go](https://pkg.go.dev/github.com/KEINOS/go-which-pgp/whichpgp#pkg-examples)
 
 ## Terminology
 
@@ -80,10 +82,6 @@ whichpgp.DetectFlavorFromArmor(armored string) (flavor string, version int, err 
 - Size limits and safety
   - Pre-decode size guard: rejects oversized base64 bodies early (DoS prevention)
   - Packet scan cap: internal scanning limited to ~4 MiB by default; error suggests increasing cap
-
-## Examples
-
-Executable examples live in `whichpgp/example_test.go` and are run via `go test`.
 
 ## Development
 
