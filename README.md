@@ -1,57 +1,154 @@
-![GitHub go.mod Go version](https://img.shields.io/github/go-mod/go-version/KEINOS/go-which-pgp)
+[![GitHub go.mod Go version](https://img.shields.io/github/go-mod/go-version/KEINOS/go-which-pgp)](https://github.com/KEINOS/go-which-pgp/blob/main/go.mod)
 [![Go Reference](https://pkg.go.dev/badge/github.com/KEINOS/go-which-pgp.svg)](https://pkg.go.dev/github.com/KEINOS/go-which-pgp/whichpgp)
 
 # Go-Which-PGP
 
-`whichpgp` is a Go library to detect the PGP flavor and the Public‑Key Packet version from an ASCII‑armored public key block.
+Go library to detect PGP flavor and packet version from ASCII-armored public keys.
 
-- OpenPGP (Packet v6; RFC-9580/crypto-refresh)
-- LibrePGP (Packet v4; RFC-4880, Packet v5; draft-koch-librepgp base)
+- **OpenPGP** (v6; RFC-9580)
+- **LibrePGP** (v4/v5; RFC-4880/draft-koch-librepgp)
 
-## Install
+## Usage
 
 ```sh
+# Install the module
 go get github.com/KEINOS/go-which-pgp
 ```
 
-## Quick start
+```go
+// Use the package
+import "github.com/KEINOS/go-which-pgp/whichpgp"
+```
 
 ```go
+package main
+
 import (
     "fmt"
-    "os"
-    "path/filepath"
-
     "github.com/KEINOS/go-which-pgp/whichpgp"
 )
 
 func main() {
-    files := []string{
-        "sample-v4-ed25519-leg.asc",       // Packet v4
-        "sample-v4-ed25519.asc",           // Packet v4
-        "sample-v5-certificate-trans.asc", // Packet v5
-        "sample-v6-certificat.asc",        // Packet v6
+    // ASCII armored PGP public key block
+    pubKey := `-----BEGIN PGP PUBLIC KEY BLOCK-----
+**snip**
+-----END PGP PUBLIC KEY BLOCK-----`
+
+    // Direct string input and output
+    flavor, version, err := whichpgp.DetectFlavorFromArmor(armor)
+    if err != nil {
+        panic(err)
     }
 
-    for _, name := range files {
-        data, err := os.ReadFile(filepath.Join("..", "testdata", name))
-        if err != nil { panic(err) }
-
-        flavor, ver, err := whichpgp.DetectFlavorFromArmor(string(data))
-        if err != nil { panic(err) }
-
-        fmt.Printf("Flavor: %s, Packet version: %d\n", flavor, ver)
-    }
+    fmt.Printf("Flavor: %s, Version: %d\n", flavor, version)
     //
     // Output:
-    // Flavor: LibrePGP (v4), Packet version: 4
-    // Flavor: LibrePGP (v4), Packet version: 4
-    // Flavor: LibrePGP (v5), Packet version: 5
-    // Flavor: OpenPGP (v6 / RFC 9580), Packet version: 6
+    // Flavor: LibrePGP (v5), Version: 5
 }
 ```
 
-- View more examples: [whichpgp/example_test.go](https://pkg.go.dev/github.com/KEINOS/go-which-pgp/whichpgp#pkg-examples)
+```go
+package main
+
+import (
+    "fmt"
+    "github.com/KEINOS/go-which-pgp/whichpgp"
+)
+
+func main() {
+    // ASCII armored PGP public key block
+    pubKey := `-----BEGIN PGP PUBLIC KEY BLOCK-----
+**snip**
+-----END PGP PUBLIC KEY BLOCK-----`
+
+    // Return structured result
+    result, err := whichpgp.DetectFlavorFromBytes([]byte(pubKey))
+    if err != nil {
+        panic(err)
+    }
+
+    fmt.Printf("Flavor: %s\n", result.Flavor.String())
+    fmt.Printf("Version: %d\n", result.PacketVersion)
+    fmt.Printf("Description: %s\n", result.String())
+    //
+    // Output:
+    // Flavor: OpenPGP
+    // Version: 6
+    // Description: OpenPGP (v6)
+}
+```
+
+### Advanced Usage
+
+You can control the behavior with options.
+
+```go
+pubKey := `-----BEGIN PGP PUBLIC KEY BLOCK-----
+**snip**
+-----END PGP PUBLIC KEY BLOCK-----`
+
+// With options for customization
+result, err := whichpgp.DetectFlavorFromBytes([]byte(pubKey),
+    whichpgp.WithStrictCRC(false),    // Allow missing CRC
+    whichpgp.WithMaxBytes(1024*1024), // Set size limit
+    whichpgp.WithBufferSize(8192),    // Custom buffer size
+)
+```
+
+```go
+filePath := filepath.Join("..", "testdata", "sample-v5-certificate-trans.asc")
+reader := io.Reader(filePath)
+
+// From io.Reader for streaming
+result, err := whichpgp.DetectFlavorFromReader(reader,
+    whichpgp.WithStrictCRC(false),    // Allow missing CRC
+    whichpgp.WithMaxBytes(1024*1024), // Set size limit
+    whichpgp.WithBufferSize(8192),    // Custom buffer size
+)
+```
+
+- 📖 **More examples:** [pkg.go.dev documentation](https://pkg.go.dev/github.com/KEINOS/go-which-pgp/whichpgp#pkg-examples)
+
+## API Reference
+
+The library provides three main functions for detecting PGP flavors:
+
+### Available Functions
+
+- **`DetectFlavorFromBytes(data []byte, opts ...Option) (*Result, error)`** - Detects PGP flavor from byte data with optional configuration
+- **`DetectFlavorFromReader(r io.Reader, opts ...Option) (*Result, error)`** - Detects PGP flavor from any `io.Reader` source
+- **`DetectFlavorFromArmor(armor string) (string, int, error)`** - Simple string-based detection API
+
+### Result Structure
+
+The new APIs return a structured `Result` type:
+
+```go
+type Result struct {
+    Flavor        Flavor // Type-safe enum: FlavorUnknown, FlavorLibrePGP, FlavorOpenPGP
+    PacketVersion int    // PGP packet version (4, 5, 6)
+}
+
+// Methods
+result.String()        // Human-readable description: "LibrePGP (v4)"
+result.Flavor.String() // Flavor name: "LibrePGP"
+```
+
+### Configuration Options
+
+Customize behavior with functional options:
+
+- `WithStrictCRC(bool)` - Require valid CRC checksums (default: true)
+- `WithMaxBytes(int)` - Set maximum data size limit
+- `WithBufferSize(int)` - Set buffer size for reader operations
+
+### Supported PGP Flavors
+
+| Flavor | Packet Versions | Description |
+|--------|----------------|-------------|
+| **LibrePGP** | v4, v5 | Based on draft specifications |
+| **OpenPGP** | v6 | RFC 9580 standard |
+| **Unknown** | - | Unrecognized or invalid format |
 
 ## Terminology
 
@@ -64,20 +161,25 @@ func main() {
 
 ## API behavior and assumptions
 
-```go
-whichpgp.DetectFlavorFromArmor(armored string) (flavor string, version int, err error)
-```
+### Detection Logic
 
-- Returns:
-  - flavor: "LibrePGP" or "OpenPGP"
-  - version: Public‑Key Packet version (4, 5, or 6)
+All detection functions follow these principles:
 
-- Armor tolerance
-  - Ignores headers until a blank/whitespace-only line
-  - Accepts LF/CRLF, multiple blank lines, and trailing blanks after END
-  - Base64 body tolerates embedded ASCII whitespace (space/tab/CR/LF)
-- CRC-24 handling
-  - If CRC line exists, validate strictly; if missing, allowed; if present but invalid, error
+- **Return values:**
+  - `DetectFlavorFromBytes` & `DetectFlavorFromReader`: `*Result` with `Flavor` enum and `PacketVersion` int
+  - `DetectFlavorFromArmor`: flavor string ("LibrePGP" or "OpenPGP") and version int (4, 5, or 6)
+
+### Armor Processing
+
+- **Headers:** Ignores all headers until a blank/whitespace-only line
+- **Line endings:** Accepts LF/CRLF, multiple blank lines, and trailing blanks after END
+- **Base64 body:** Tolerates embedded ASCII whitespace (space/tab/CR/LF)
+
+### CRC-24 Validation
+
+- **If CRC line exists:** Validates strictly - invalid CRC returns error
+- **If CRC missing:** Allowed by default (use `WithStrictCRC(true)` to require)
+- **Configurable:** Use `WithStrictCRC(false)` to ignore CRC validation entirely
   - See RFC 4880 (Armor/Checksum, e.g., Section 6.3) and RFC 9580
 - Size limits and safety
   - Pre-decode size guard: rejects oversized base64 bodies early (DoS prevention)
@@ -85,13 +187,11 @@ whichpgp.DetectFlavorFromArmor(armored string) (flavor string, version int, err 
 
 ## Development
 
-- Tests: `go test ./...`
-- Lint: `golangci-lint run`
-- Fuzz (Go 1.20+): `go test -fuzz=FuzzDetectFlavorFromArmor -run=^$` (optional)
-
-## Contributing
-
-- Branch to PR: `main`
+```sh
+go test ./...                     # Tests
+golangci-lint run                 # Lint
+go test -fuzz=Fuzz* -run=^$       # Fuzz testing
+```
 
 ## License
 
