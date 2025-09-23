@@ -13,6 +13,7 @@ import (
 	"github.com/pkg/errors"
 )
 
+// Constants for magic numbers and limits.
 const (
 	// Armor markers (without trailing newline). Some inputs may use CRLF or have
 	// trailing spaces; we locate markers without assuming exact EOL style.
@@ -76,10 +77,11 @@ const (
 // Armor handling:
 //   - Armor headers are ignored until a blank/whitespace-only separator line.
 //   - The base64 body tolerates embedded ASCII whitespace and optional CRC-24.
-//   - If a CRC-24 line is present, it is validated strictly; if missing, it is allowed;
-//     if present but invalid, an error is returned.
+//   - If a CRC-24 line is present, it is validated strictly; if missing, it is
+//     allowed; if present but invalid, an error is returned.
 //
-// References: RFC 4880 (ASCII Armor and Armor Checksum, e.g., Section 6.3) and RFC 9580.
+// References: RFC 4880 (ASCII Armor and Armor Checksum, e.g., Section 6.3) and
+// RFC 9580.
 func DetectFlavorFromArmor(armored string) (string, int, error) {
 	raw, err := decodeArmored(armored)
 	if err != nil {
@@ -152,8 +154,8 @@ func compactB64(input string) string {
 	return string(out)
 }
 
-// consumePartialBody advances over a partial-length body and returns total consumed bytes.
-// If tag is 6 or 14, the version byte is the first byte of the body.
+// consumePartialBody advances over a partial-length body and returns total consumed
+// bytes. If tag is 6 or 14, the version byte is the first byte of the body.
 func consumePartialBody(data []byte, startIndex int, hdrLen int, tag int, lenFirst byte) (int, int, bool, error) {
 	bodyStart := startIndex + hdrLen
 
@@ -323,8 +325,8 @@ func findArmorBlock(src string) (string, error) {
 	return after[:endIdx], nil
 }
 
-// firstPubkeyVersion scans the raw packet data for the first public key or subkey packet
-// (tag 6 or 14) and returns its version byte.
+// firstPubkeyVersion scans the raw packet data for the first public key or subkey
+// packet (tag 6 or 14) and returns its version byte.
 //
 //nolint:cyclop // The packet scanning loop needs several branch cases (new/old format, partial/finite lengths).
 func firstPubkeyVersion(data []byte) (int, error) {
