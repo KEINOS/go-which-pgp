@@ -1,6 +1,6 @@
 // Example usages of public functions.
 //
-// We implment these examples as golden cases in tests to ensure the documented
+// We implement these examples as golden cases in tests to ensure the documented
 // usage patterns remain valid over time.
 package whichpgp_test
 
