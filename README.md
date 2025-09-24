@@ -5,8 +5,8 @@
 
 Go library to detect PGP flavor and packet version from ASCII-armored public keys.
 
-- **OpenPGP** (v6; RFC-9580)
-- **LibrePGP** (v4/v5; RFC-4880/draft-koch-librepgp)
+- **[OpenPGP](https://www.openpgp.org/)** (v6 [RFC-9580](https://www.rfc-editor.org/rfc/rfc9580.html))
+- **[LibrePGP](https://www.librepgp.org/)** (v4 [RFC-4880](https://www.rfc-editor.org/rfc/rfc4880.html), v5 [draft-koch-librepgp](https://www.ietf.org/archive/id/draft-koch-librepgp-04.html))
 
 ## Usage
 
