@@ -1,7 +1,9 @@
+//nolint:varnamelen,funlen // Allow short names and long function length
 package whichpgp_test
 
 import (
 	"encoding/base64"
+	"fmt"
 	"strings"
 	"testing"
 
@@ -722,4 +724,415 @@ func TestResult_String(t *testing.T) {
 			assert.Equal(t, tc.expected, actual)
 		})
 	}
+}
+
+func TestDetectFlavorFromArmor_MalformedInputs(t *testing.T) {
+	t.Parallel()
+
+	testCases := []struct {
+		name        string
+		armor       string
+		expectError bool
+		errorMsg    string
+	}{
+		{
+			name:        "missing BEGIN marker",
+			armor:       "invalid armor\n-----END PGP PUBLIC KEY BLOCK-----\n",
+			expectError: true,
+			errorMsg:    "BEGIN line not found",
+		},
+		{
+			name:        "missing END marker",
+			armor:       "-----BEGIN PGP PUBLIC KEY BLOCK-----\ninvalid\n",
+			expectError: true,
+			errorMsg:    "END line not found",
+		},
+		{
+			name:        "empty armor block",
+			armor:       "-----BEGIN PGP PUBLIC KEY BLOCK-----\n\n-----END PGP PUBLIC KEY BLOCK-----\n",
+			expectError: true,
+			errorMsg:    "empty data",
+		},
+		{
+			name:        "invalid base64",
+			armor:       "-----BEGIN PGP PUBLIC KEY BLOCK-----\n\n!@#$%\n-----END PGP PUBLIC KEY BLOCK-----\n",
+			expectError: true,
+			errorMsg:    "base64 decode",
+		},
+		{
+			name:        "corrupted CRC",
+			armor:       "-----BEGIN PGP PUBLIC KEY BLOCK-----\n\nxgEE\n=AAAA\n-----END PGP PUBLIC KEY BLOCK-----\n",
+			expectError: true,
+			errorMsg:    "armor CRC24 mismatch",
+		},
+		{
+			name:        "malformed CRC line",
+			armor:       "-----BEGIN PGP PUBLIC KEY BLOCK-----\n\nxgEE\n=invalid\n-----END PGP PUBLIC KEY BLOCK-----\n",
+			expectError: false, // CRC is ignored if malformed
+			errorMsg:    "",
+		},
+		{
+			name:        "no blank line after headers",
+			armor:       "-----BEGIN PGP PUBLIC KEY BLOCK-----\nComment: test\nxgEE\n-----END PGP PUBLIC KEY BLOCK-----\n",
+			expectError: true,
+			errorMsg:    "unexpected EOF in armor headers",
+		},
+		{
+			name:        "binary data instead of base64",
+			armor:       "-----BEGIN PGP PUBLIC KEY BLOCK-----\n\n\x00\x01\x02\x03\n-----END PGP PUBLIC KEY BLOCK-----\n",
+			expectError: true,
+			errorMsg:    "base64 decode",
+		},
+		{
+			name:        "extremely short base64",
+			armor:       "-----BEGIN PGP PUBLIC KEY BLOCK-----\n\nx\n-----END PGP PUBLIC KEY BLOCK-----\n",
+			expectError: true,
+			errorMsg:    "base64 decode",
+		},
+		{
+			name:        "base64 with invalid characters",
+			armor:       "-----BEGIN PGP PUBLIC KEY BLOCK-----\n\nabc!@#\n-----END PGP PUBLIC KEY BLOCK-----\n",
+			expectError: true,
+			errorMsg:    "base64 decode",
+		},
+	}
+
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			_, _, err := whichpgp.DetectFlavorFromArmor(tc.armor)
+
+			if tc.expectError {
+				require.Error(t, err)
+				assert.Contains(t, err.Error(), tc.errorMsg)
+			} else {
+				require.NoError(t, err)
+			}
+		})
+	}
+}
+
+func TestDetectFlavorFromArmor_CorruptedPackets(t *testing.T) {
+	t.Parallel()
+
+	testCases := []struct {
+		name        string
+		payload     []byte
+		expectError bool
+		errorMsg    string
+	}{
+		{
+			name:        "invalid packet header (no high bit set)",
+			payload:     []byte{0x00, 0x01, 0x04}, // high bit not set
+			expectError: true,
+			errorMsg:    "not a packet header",
+		},
+		{
+			name:        "truncated new-format header",
+			payload:     []byte{0xC0 | 6}, // missing length octet
+			expectError: true,
+			errorMsg:    "need length octet",
+		},
+		{
+			name:        "truncated old-format header",
+			payload:     []byte{0x80 | (6 << 2)}, // missing length
+			expectError: true,
+			errorMsg:    "need 1-octet length",
+		},
+		{
+			name:        "unsupported old-format length type (indeterminate)",
+			payload:     []byte{0x80 | (6 << 2) | 3, 0x00}, // length type 3 (indeterminate)
+			expectError: true,
+			errorMsg:    "indeterminate old-format length not supported",
+		},
+		{
+			name:        "packet version 0 (invalid)",
+			payload:     []byte{0xC0 | 6, 0x01, 0x00}, // version 0
+			expectError: true,
+			errorMsg:    "invalid packet version 0",
+		},
+		{
+			name:        "truncated packet body (new format)",
+			payload:     []byte{0xC0 | 6, 0x05, 0x04}, // claims 5 bytes but only 1
+			expectError: true,
+			errorMsg:    "truncated packet",
+		},
+		{
+			name:        "truncated packet body (old format)",
+			payload:     []byte{0x98, 0x05, 0x04}, // claims 5 bytes but only 1
+			expectError: true,
+			errorMsg:    "truncated packet",
+		},
+		{
+			name:        "invalid partial length octet",
+			payload:     []byte{0xC0 | 6, 200, 0x00}, // invalid partial length
+			expectError: true,
+			errorMsg:    "truncated packet", // Actually truncated
+		},
+		{
+			name:        "suspiciously large body length",
+			payload:     []byte{0xC0 | 6, 255, 0x00, 0x00, 0x00, 0x7F, 0xFF, 0xFF, 0xFF}, // 2^31 bytes
+			expectError: true,
+			errorMsg:    "truncated packet", // Actually truncated due to size check
+		},
+		{
+			name:        "non-tag6 packet only",
+			payload:     []byte{0xC0 | 1, 0x01, 0x00}, // tag 1 (not 6 or 14)
+			expectError: true,
+			errorMsg:    "no tag 6/14 packet found",
+		},
+	}
+
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			armor := armor(tc.payload)
+			_, _, err := whichpgp.DetectFlavorFromArmor(armor)
+
+			if tc.expectError {
+				require.Error(t, err)
+				assert.Contains(t, err.Error(), tc.errorMsg)
+			} else {
+				require.NoError(t, err)
+			}
+		})
+	}
+}
+
+//nolint:dupword // duplicate armor lines are intentional here
+func TestDetectFlavorFromArmor_EdgeCaseValidArmor(t *testing.T) {
+	t.Parallel()
+
+	testCases := []struct {
+		name     string
+		armor    string
+		expected string
+	}{
+		{
+			name: "multiple headers",
+			armor: `-----BEGIN PGP PUBLIC KEY BLOCK-----
+Comment: First comment
+Version: Test
+Comment: Second comment
+Hash: SHA256
+
+xgEE
+=A4sP
+-----END PGP PUBLIC KEY BLOCK-----
+`,
+			expected: "LibrePGP (v4)",
+		},
+		{
+			name: "extra whitespace in base64",
+			armor: `-----BEGIN PGP PUBLIC KEY BLOCK-----
+
+x g E E
+= A 4 s P
+-----END PGP PUBLIC KEY BLOCK-----
+`,
+			expected: "LibrePGP (v4)",
+		},
+		{
+			name:     "mixed EOL styles (CRLF and LF)",
+			armor:    "-----BEGIN PGP PUBLIC KEY BLOCK-----\r\n\r\nxgEE\r\n=A4sP\r\n-----END PGP PUBLIC KEY BLOCK-----\n",
+			expected: "LibrePGP (v4)",
+		},
+		{
+			name: "multiple blank lines",
+			armor: `-----BEGIN PGP PUBLIC KEY BLOCK-----
+
+
+
+xgEE
+
+
+=A4sP
+
+
+-----END PGP PUBLIC KEY BLOCK-----
+`,
+			expected: "LibrePGP (v4)",
+		},
+		{
+			name: "header with special characters",
+			armor: `-----BEGIN PGP PUBLIC KEY BLOCK-----
+Comment: Test with spaces and symbols: !@#$%^&*()
+Version: 1.0.0
+
+xgEE
+=A4sP
+-----END PGP PUBLIC KEY BLOCK-----
+`,
+			expected: "LibrePGP (v4)",
+		},
+		{
+			name: "minimal armor with CRC",
+			armor: `-----BEGIN PGP PUBLIC KEY BLOCK-----
+
+xgEE
+=A4sP
+-----END PGP PUBLIC KEY BLOCK-----`,
+			expected: "LibrePGP (v4)",
+		},
+		{
+			name: "armor with unicode in headers",
+			armor: `-----BEGIN PGP PUBLIC KEY BLOCK-----
+Comment: Test with unicode: テスト 🚀
+Version: 1.0
+
+xgEE
+=A4sP
+-----END PGP PUBLIC KEY BLOCK-----
+`,
+			expected: "LibrePGP (v4)",
+		},
+	}
+
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			flavor, ver, err := whichpgp.DetectFlavorFromArmor(tc.armor)
+			require.NoError(t, err)
+			require.Equal(t, 4, ver)
+			assert.Equal(t, tc.expected, flavor)
+		})
+	}
+}
+
+func TestDetectFlavorFromArmor_DoSPrevention(t *testing.T) {
+	t.Parallel()
+
+	t.Run("extremely large base64 payload", func(t *testing.T) {
+		t.Parallel()
+
+		// Create base64 that would decode to >8MiB (default max)
+		// Each base64 char represents ~6 bits, so ~12MiB base64 -> ~9MiB decoded
+		largeB64 := strings.Repeat("A", 12*1024*1024) // 12MiB of 'A's
+
+		armor := fmt.Sprintf(`-----BEGIN PGP PUBLIC KEY BLOCK-----
+
+%s
+-----END PGP PUBLIC KEY BLOCK-----
+`, largeB64)
+
+		_, _, err := whichpgp.DetectFlavorFromArmor(armor)
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "too large")
+	})
+
+	t.Run("large base64 with custom max bytes", func(t *testing.T) {
+		t.Parallel()
+
+		// Test with custom max bytes limit
+		largeB64 := strings.Repeat("A", 100*1024) // 100KiB
+
+		armor := fmt.Sprintf(`-----BEGIN PGP PUBLIC KEY BLOCK-----
+
+%s
+-----END PGP PUBLIC KEY BLOCK-----
+`, largeB64)
+
+		// Should fail with small limit
+		_, err := whichpgp.DetectFlavorFromBytes([]byte(armor), whichpgp.WithMaxBytes(50*1024))
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "too large")
+
+		// Should pass with larger limit (but invalid packet)
+		_, err = whichpgp.DetectFlavorFromBytes([]byte(armor), whichpgp.WithMaxBytes(200*1024))
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "not a packet header") // Invalid packet structure
+	})
+
+	t.Run("pathological packet sequence", func(t *testing.T) {
+		t.Parallel()
+
+		// Create many small invalid packets to test scanning limits
+		var payload []byte
+		for range 1000 {
+			// Invalid packet headers
+			payload = append(payload, 0x00, 0x01, 0x02)
+		}
+
+		armor := armor(payload)
+
+		_, _, err := whichpgp.DetectFlavorFromArmor(armor)
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "not a packet header") // First invalid packet causes error
+	})
+
+	t.Run("deep partial length nesting", func(t *testing.T) {
+		t.Parallel()
+
+		// Create deeply nested partial lengths (but within scan cap)
+		payload := []byte{0xC0 | 6, 224} // partial length start
+		for range 10 {
+			payload = append(payload, 224) // nested partial
+		}
+
+		payload = append(payload, 1, 0x04) // final one-octet with version
+
+		armor := armor(payload)
+
+		require.NotPanics(t, func() {
+			_, _, err := whichpgp.DetectFlavorFromArmor(armor)
+
+			require.NoError(t, err)
+		})
+	})
+
+	t.Run("scan cap exceeded", func(t *testing.T) {
+		t.Parallel()
+
+		// Create payload larger than default scan cap (4MiB)
+		// Fill with non-tag6 packets to force scanning to continue
+		payload := make([]byte, 5*1024*1024) // 5MiB
+		for i := 0; i < len(payload); i += 3 {
+			payload[i] = 0xC0 | 1 // tag 1 packet
+			if i+1 < len(payload) {
+				payload[i+1] = 0x01 // length
+			}
+
+			if i+2 < len(payload) {
+				payload[i+2] = 0x00 // dummy data
+			}
+		}
+
+		armor := armor(payload)
+
+		_, _, err := whichpgp.DetectFlavorFromArmor(armor)
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "scan cap reached")
+	})
+
+	t.Run("custom scan cap", func(t *testing.T) {
+		t.Parallel()
+
+		// Test with custom scan cap
+		payload := make([]byte, 10*1024) // 10KiB of non-tag6 packets
+		for i := 0; i < len(payload); i += 3 {
+			payload[i] = 0xC0 | 1
+			if i+1 < len(payload) {
+				payload[i+1] = 0x01
+			}
+
+			if i+2 < len(payload) {
+				payload[i+2] = 0x00
+			}
+		}
+
+		armor := armor(payload)
+
+		// Should fail with small scan cap
+		_, err := whichpgp.DetectFlavorFromBytes([]byte(armor), whichpgp.WithScanCap(1024))
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "scan cap reached")
+
+		// Should succeed with larger scan cap (but still invalid packet)
+		_, err = whichpgp.DetectFlavorFromBytes([]byte(armor), whichpgp.WithScanCap(20*1024))
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "need length octet") // Invalid packet structure
+	})
 }
